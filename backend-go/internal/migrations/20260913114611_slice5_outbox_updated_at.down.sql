@@ -1,0 +1,1 @@
+ALTER TABLE IF EXISTS "DomainEvent" DROP COLUMN IF EXISTS "updatedAt";

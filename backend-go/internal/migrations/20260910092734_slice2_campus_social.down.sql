@@ -1,0 +1,17 @@
+DROP TABLE IF EXISTS "Comment";
+DROP TABLE IF EXISTS "Like";
+DROP TABLE IF EXISTS "Post";
+DROP TABLE IF EXISTS "Follow";
+DROP TABLE IF EXISTS "Block";
+DROP TABLE IF EXISTS "CommunityMembership";
+DROP TABLE IF EXISTS "Community";
+DROP TABLE IF EXISTS "UniversityMembership";
+DROP TABLE IF EXISTS "University";
+DROP TYPE IF EXISTS "PostVisibility";
+DROP TYPE IF EXISTS "CommunityMemberStatus";
+DROP TYPE IF EXISTS "CommunityRole";
+DROP TYPE IF EXISTS "CommunityVisibility";
+DROP TYPE IF EXISTS "CommunityType";
+DROP TYPE IF EXISTS "MemberVerification";
+DROP TYPE IF EXISTS "MembershipRole";
+DROP TYPE IF EXISTS "MembershipStatus";

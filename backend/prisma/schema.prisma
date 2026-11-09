@@ -1,0 +1,567 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Application roles. These are NOT database privileges.
+// Registration always defaults to STUDENT; users cannot self-promote.
+enum Role {
+  STUDENT
+  STAFF
+  MODERATOR
+  UNIVERSITY_ADMIN
+}
+
+// Email-verification lifecycle. This is NOT university verification.
+// University (institutional) verification belongs to a later slice.
+enum VerificationStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+model User {
+  id                 String             @id @default(uuid())
+  email              String             @unique
+  passwordHash       String             // Argon2id hash. Never returned by the API.
+  displayName        String?
+  avatarUrl          String?
+  bio                String?
+  role               Role               @default(STUDENT)
+  verificationStatus VerificationStatus @default(UNVERIFIED)
+  isActive           Boolean            @default(true)
+  emailVerifiedAt    DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  refreshTokens RefreshToken[]
+  universityMemberships UniversityMembership[]
+  communityMemberships CommunityMembership[]
+  ownedCommunities Community[] @relation("CommunityOwner")
+  posts Post[]
+  likes Like[]
+  comments Comment[]
+  following Follow[] @relation("Follower")
+  followers Follow[] @relation("Following")
+  blocksGiven Block[] @relation("Blocker")
+  blocksReceived Block[] @relation("Blocked")
+  organizedEvents Event[]
+  tickets Ticket[]
+  notifications Notification[] @relation("NotificationRecipient")
+  triggeredNotifications Notification[] @relation("NotificationActor")
+  notificationPreference NotificationPreference?
+  conversationMembers ConversationMember[]
+  sentMessages Message[] @relation("MessageSender")
+
+  @@index([role])
+}
+
+// Opaque refresh-token sessions. Multiple simultaneous sessions per user
+// are supported (userId is intentionally NOT unique).
+//
+// Only a deterministic SHA-256 digest of the raw token is stored here
+// (tokenHash). The raw token is never persisted.
+model RefreshToken {
+  id                String    @id @default(uuid())
+  userId            String
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash         String    @unique
+  familyId          String
+  replacedByTokenId String?
+  expiresAt         DateTime
+  createdAt         DateTime  @default(now())
+  revokedAt         DateTime?
+  lastUsedAt        DateTime?
+
+  @@index([userId])
+  @@index([familyId])
+}
+
+// Email verification tokens. Only the SHA-256 digest is stored.
+model EmailVerificationToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  usedAt    DateTime?
+
+  @@index([userId])
+}
+
+// Password reset tokens. Only the SHA-256 digest is stored.
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  usedAt    DateTime?
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Slice 2: campus identity + social domain.
+// Email verification (User.emailVerifiedAt) proves control of an address.
+// University verification (UniversityMembership.verificationStatus) proves
+// campus affiliation. The two are deliberately separate mechanisms.
+// ---------------------------------------------------------------------------
+
+enum MembershipStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+enum MembershipRole {
+  STUDENT
+  STAFF
+  MODERATOR
+  ADMIN
+}
+
+enum MemberVerification {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum CommunityType {
+  DEPARTMENT
+  FACULTY
+  HALL
+  CLASS
+  CLUB
+  SOCIETY
+  SPORTS
+  GAMING
+  PROJECT
+  INTEREST
+  OTHER
+}
+
+enum CommunityVisibility {
+  PUBLIC
+  UNIVERSITY
+  PRIVATE
+}
+
+enum CommunityRole {
+  MEMBER
+  MODERATOR
+  OWNER
+}
+
+enum CommunityMemberStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+}
+
+enum PostVisibility {
+  PUBLIC
+  UNIVERSITY
+  COMMUNITY
+  FOLLOWERS
+}
+
+model University {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  domain      String?  @unique
+  description String?
+  logoUrl     String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  memberships UniversityMembership[]
+  communities Community[]
+  posts       Post[]
+  events      Event[]
+
+  @@index([isActive])
+}
+
+model UniversityMembership {
+  id                 String            @id @default(uuid())
+  userId             String
+  user               User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  universityId       String
+  university         University        @relation(fields: [universityId], references: [id], onDelete: Restrict)
+  status             MembershipStatus  @default(ACTIVE)
+  role               MembershipRole    @default(STUDENT)
+  verificationStatus MemberVerification @default(UNVERIFIED)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  @@unique([userId, universityId])
+  @@index([userId])
+  @@index([universityId])
+  @@index([universityId, status])
+}
+
+model Community {
+  id           String              @id @default(uuid())
+  universityId String
+  university   University          @relation(fields: [universityId], references: [id], onDelete: Restrict)
+  name         String
+  slug         String
+  description  String?
+  type         CommunityType       @default(CLUB)
+  visibility   CommunityVisibility @default(UNIVERSITY)
+  ownerId      String?
+  owner        User?               @relation("CommunityOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  isActive     Boolean             @default(true)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  memberships CommunityMembership[]
+  posts       Post[]
+  events      Event[]
+
+  // Slugs are scoped per university: /coding may exist in many universities.
+  @@unique([universityId, slug])
+  @@index([universityId])
+  @@index([universityId, isActive])
+}
+
+model CommunityMembership {
+  id          String                @id @default(uuid())
+  userId      String
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  communityId String
+  community   Community             @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  role        CommunityRole         @default(MEMBER)
+  status      CommunityMemberStatus @default(ACTIVE)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  @@unique([userId, communityId])
+  @@index([userId])
+  @@index([communityId])
+  @@index([communityId, status])
+}
+
+model Follow {
+  id          String   @id @default(uuid())
+  followerId  String
+  follower    User     @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  followingId String
+  following   User     @relation("Following", fields: [followingId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+}
+
+model Block {
+  id        String   @id @default(uuid())
+  blockerId String
+  blocker   User     @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedId String
+  blocked   User     @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
+}
+
+model Post {
+  id           String         @id @default(uuid())
+  authorId     String
+  author       User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  universityId String
+  university   University     @relation(fields: [universityId], references: [id], onDelete: Restrict)
+  communityId  String?
+  community    Community?     @relation(fields: [communityId], references: [id], onDelete: SetNull)
+  content      String
+  visibility   PostVisibility @default(UNIVERSITY)
+  likeCount    Int            @default(0)
+  commentCount Int            @default(0)
+  deletedAt    DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  likes    Like[]
+  comments Comment[]
+  eventId  String?
+  event    Event?    @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  @@index([authorId])
+  @@index([universityId])
+  @@index([communityId])
+  @@index([visibility])
+  @@index([createdAt])
+  @@index([deletedAt])
+}
+
+model Like {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, postId])
+  @@index([postId])
+  @@index([userId])
+}
+
+model Comment {
+  id        String    @id @default(uuid())
+  postId    String
+  post      Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  content   String
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([postId, createdAt])
+  @@index([authorId])
+}
+
+// ---------------------------------------------------------------------------
+// Slice 3: first-class events + free ticketing.
+// An Event is NOT a Post: posts reference events by ID (Post.eventId) without
+// duplicating event data. Free ticketing only — no payment fields exist.
+// ---------------------------------------------------------------------------
+
+enum EventVisibility {
+  PUBLIC
+  UNIVERSITY
+  COMMUNITY
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+  COMPLETED
+}
+
+enum EventType {
+  MEETUP
+  WORKSHOP
+  SEMINAR
+  SOCIAL
+  SPORTS
+  ACADEMIC
+  OTHER
+}
+
+enum TicketStatus {
+  ACTIVE
+  CANCELLED
+  CHECKED_IN
+}
+
+model Event {
+  id                   String          @id @default(uuid())
+  organizerId          String
+  organizer            User            @relation(fields: [organizerId], references: [id], onDelete: Cascade)
+  universityId         String
+  university           University      @relation(fields: [universityId], references: [id], onDelete: Restrict)
+  communityId          String?
+  community            Community?      @relation(fields: [communityId], references: [id], onDelete: SetNull)
+  title                String
+  description          String?
+  type                 EventType       @default(OTHER)
+  location             String?
+  startsAt             DateTime
+  endsAt               DateTime?
+  capacity             Int
+  registrationDeadline DateTime?
+  visibility           EventVisibility @default(UNIVERSITY)
+  status               EventStatus     @default(DRAFT)
+  registeredCount      Int             @default(0)
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  tickets Ticket[]
+  posts   Post[]
+
+  @@index([universityId])
+  @@index([communityId])
+  @@index([organizerId])
+  @@index([status])
+  @@index([visibility])
+  @@index([startsAt])
+  @@index([universityId, status, startsAt])
+}
+
+model Ticket {
+  id             String       @id @default(uuid())
+  eventId        String
+  event          Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Opaque public ticket credential (QR content): 256-bit random hex,
+  // unique, unguessable, single-purpose (one event entry). Retrievable so
+  // owners/organizers can re-display QRs. Verification is organizer-authed
+  // and status-gated; cancel/revoke kills the code's power. Documented in
+  // the security plan (DB read exposes active codes by design tradeoff).
+  ticketCode     String       @unique
+  status         TicketStatus @default(ACTIVE)
+  registeredAt   DateTime     @default(now())
+  cancelledAt    DateTime?
+  checkedInAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  // One registration row per user+event: re-registration reactivates it.
+  @@unique([eventId, userId])
+  @@index([eventId])
+  @@index([userId])
+  @@index([eventId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Slice 5: notifications + realtime foundation.
+//
+// DomainEvent is a PostgreSQL-backed transactional outbox: business actions
+// persist their event atomically with the originating write, and a poller
+// claims due rows (conditional claim, exactly one worker) and routes them to
+// handlers that create Notifications and emit realtime delivery. No broker.
+// ---------------------------------------------------------------------------
+
+enum DomainEventStatus {
+  PENDING
+  PROCESSING
+  DONE
+  FAILED
+}
+
+enum NotificationType {
+  LIKE
+  COMMENT
+  FOLLOW
+  EVENT_CANCELLED
+}
+
+model DomainEvent {
+  id            String            @id @default(uuid())
+  type          String
+  aggregateType String
+  aggregateId   String
+  actorId       String?
+  payload       Json
+  status        DomainEventStatus @default(PENDING)
+  attempts      Int               @default(0)
+  availableAt   DateTime          @default(now())
+  lastError     String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  processedAt   DateTime?
+
+  @@index([status, availableAt])
+  @@index([type])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  recipientId String
+  recipient User             @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  actorId   String?
+  actor     User?            @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  type      NotificationType
+  title     String
+  body      String?
+  data      Json?
+  // Idempotency key (e.g. "like:<likeId>"): at-most-once notification
+  // creation even if an event is processed more than once.
+  dedupeKey String?          @unique
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([recipientId, createdAt])
+  @@index([recipientId, isRead])
+}
+
+model NotificationPreference {
+  userId              String   @id
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  likesEnabled        Boolean  @default(true)
+  commentsEnabled     Boolean  @default(true)
+  followsEnabled      Boolean  @default(true)
+  eventUpdatesEnabled Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Slice 6: 1:1 direct messaging. PostgreSQL is the source of truth;
+// Socket.IO is the delivery mechanism. No group chats in this slice.
+// ---------------------------------------------------------------------------
+
+enum ConversationType {
+  DIRECT
+}
+
+model Conversation {
+  id            String           @id @default(uuid())
+  type          ConversationType @default(DIRECT)
+  // Deterministic pair key "min(userA,userB):max(userA,userB)" with a unique
+  // constraint: exactly one direct conversation per user pair, enforced by
+  // the database even under concurrent creation.
+  directKey     String           @unique
+  lastMessageAt DateTime?
+  lastMessageId String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  members  ConversationMember[]
+  messages Message[]
+
+  @@index([updatedAt])
+}
+
+model ConversationMember {
+  id             String    @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  joinedAt       DateTime  @default(now())
+  lastReadAt     DateTime?
+  // Denormalized unread counter: incremented transactionally on send,
+  // reset on read, decremented when an unread message is soft-deleted.
+  unreadCount    Int       @default(0)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@index([conversationId])
+}
+
+model Message {
+  id              String    @id @default(uuid())
+  conversationId  String
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId        String
+  sender          User      @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  // Client-supplied idempotency key: retries return the original message.
+  clientMessageId String
+  body            String
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([senderId, clientMessageId])
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+}

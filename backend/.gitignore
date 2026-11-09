@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment - NEVER commit real secrets
+.env
+.env.*
+!.env.example
+
+# Test coverage
+coverage/
+
+# Prisma
+prisma/migrations/dev.db*
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local redis binary for dev/test (see README)
+bin/
+
+# OS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
